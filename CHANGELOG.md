@@ -1,5 +1,58 @@
 # Changelog
 
+## 3.0.0-beta.4
+
+### Major Changes
+
+- 892da1d: Delete brand-manifest.json. The brand object in brand.json is now the single
+  canonical brand definition. Task schemas reference brands by domain + brand_id
+  instead of passing inline manifests. Brand data is always resolved from
+  brand.json or the registry.
+- 7cf7476: Remove `estimated_exposures` from Product, replace with optional `forecast`
+
+  - Remove the unitless `estimated_exposures` integer field from the Product schema
+  - Add optional `forecast` field using the existing `DeliveryForecast` type, giving buyers structured delivery estimates with time periods, metric ranges, and methodology context during product discovery
+
+- 811bd0e: Remove `proposal_id` from get_products request schema
+
+  Proposal refinement now uses protocol-level session continuity (`context_id` in MCP, `contextId` in A2A) instead of a task-level parameter. This makes refinement consistent across get_products, get_signals, and build_creative. Proposal execution via create_media_buy is unchanged.
+
+### Minor Changes
+
+- c872c94: Brand registry as primary company identity source. Member profiles now link to the brand registry via `primary_brand_domain` instead of storing logos and colors directly. Members set up their brand through the brand tools and get a hosted brand.json at `agenticadvertising.org/brands/yourdomain.com/brand.json`. Placing a one-line pointer at `/.well-known/brand.json` makes AgenticAdvertising.org the authoritative brand source for any domain.
+- 2957069: Add promoted-offerings-requirement enum and `requires` property to promoted offerings asset requirements (#1040)
+- b61f271: Add `sync_audiences` task for CRM-based audience management.
+
+  Buyers wrapping closed platforms (LinkedIn, Meta, TikTok, Google Ads) need to upload hashed CRM data before creating campaigns that target or suppress matched audiences. This adds a dedicated task for that workflow, parallel to `sync_event_sources`.
+
+  Schema:
+
+  - New task: `sync_audiences` with request and response schemas
+  - New core schema: `audience-member.json` — hashed identifiers for CRM list members (email, phone, MAIDs)
+  - `targeting.json`: add `audience_include` and `audience_exclude` arrays for referencing audiences in `create_media_buy` targeting overlays
+
+  Documentation:
+
+  - New task reference: `docs/media-buy/task-reference/sync_audiences.mdx`
+  - Updated `docs/media-buy/advanced-topics/targeting.mdx` with `audience_include`/`audience_exclude` overlay documentation
+
+- 0cede41: Add CreativeBrief type to BuildCreativeRequest for structured campaign context
+
+### Patch Changes
+
+- acd9db7: Addie quality improvements from thread review: accurate spec claims, fictional example names, ads.txt knowledge, shorter deflections, agent type awareness, and session-level web feedback prompt.
+- 2b79286: Clarify that end_date is exclusive in get_media_buy_delivery documentation
+
+  - Add explicit "inclusive" and "exclusive" labels to start_date/end_date parameters
+  - Add callout explaining start-inclusive, end-exclusive behavior with examples
+  - Add examples table showing common date range patterns
+  - Reinforce behavior in Query Behavior section
+
+- 24b972e: Document save endpoints for brands and properties in registry API docs.
+- b311f65: Fix Addie brand management: add missing brand tools to tool reference, prevent save_brand from overwriting enrichment data
+- 751760a:
+- b61fcd7: Register all tool sets for web chat, matching Slack channel parity. Previously web chat only had knowledge, billing, and schema tools — brand, directory, property, admin, events, meetings, collaboration, and other tools were missing, causing "Unknown tool" errors. Extracts shared baseline tool registration into a single module both channels import.
+
 ## 3.0.0-beta.3
 
 ### Major Changes
