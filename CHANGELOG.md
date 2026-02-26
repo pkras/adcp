@@ -1,5 +1,267 @@
 # Changelog
 
+## 3.0.0-beta.4
+
+### Major Changes
+
+- 892da1d: Delete brand-manifest.json. The brand object in brand.json is now the single
+  canonical brand definition. Task schemas reference brands by domain + brand_id
+  instead of passing inline manifests. Brand data is always resolved from
+  brand.json or the registry.
+- 5b8feea: **BREAKING**: Rename `catalog` to `catalogs` (array) on creative manifest. Formats can declare multiple catalog_requirements (e.g., product + inventory + store); the manifest now supports multiple catalogs to match. Each catalog's `type` maps to the corresponding catalog_requirements entry.
+- 7cf7476: Remove `estimated_exposures` from Product, replace with optional `forecast`
+
+  - Remove the unitless `estimated_exposures` integer field from the Product schema
+  - Add optional `forecast` field using the existing `DeliveryForecast` type, giving buyers structured delivery estimates with time periods, metric ranges, and methodology context during product discovery
+
+- 811bd0e: Remove `proposal_id` from get_products request schema
+
+  Proposal refinement now uses protocol-level session continuity (`context_id` in MCP, `contextId` in A2A) instead of a task-level parameter. This makes refinement consistent across get_products, get_signals, and build_creative. Proposal execution via create_media_buy is unchanged.
+
+- 4c33b99: Add required `buying_mode` discriminator to `get_products` request for explicit wholesale vs curated buying intent.
+
+  Buyers with their own audience stacks (DMPs, CDPs, AXE integrations) can now set `buying_mode: "wholesale"` to declare they want raw inventory without publisher curation. Buyers using curated discovery set `buying_mode: "brief"` and include `brief`. This removes ambiguity from legacy requests that omitted `buying_mode`.
+
+  When `buying_mode` is `"wholesale"`:
+
+  - Publisher returns products supporting buyer-directed targeting
+  - No AI curation or personalization is applied
+  - No proposals are returned
+  - `brief` must not be provided (mutually exclusive)
+
+### Minor Changes
+
+- f6336af: Serve AgenticAdvertising.org brand.json from hosted_brands database so it can be managed via Addie tools. Seed initial brand data including structured tone format with voice and attributes.
+- a9e118d: Introduce Accounts Protocol documentation as a named cross-protocol section covering commercial infrastructure: `sync_accounts`, `list_accounts`, and `report_usage`. Includes Accounts Protocol overview connecting brand registry, account establishment, and settlement into a transaction lifecycle. Moves account management tasks from Media Buy Protocol to the new Accounts Protocol section.
+- 142bcd5: Replace account_id with account reference, restructure account model.
+
+  - Add `account-ref.json`: union type accepting `{ account_id }` or `{ brand, operator }`
+  - Use `brand-ref.json` (domain + brand_id) instead of flat house + brand_id in account schemas
+  - Make `operator` required everywhere (brand sets operator to its own domain when operating its own seat)
+  - Add `account_resolution` capability (string: `explicit_account_id` or `implicit_from_sync`)
+  - Simplify billing to `operator` or `agent` only (brand-as-operator when brand pays directly)
+  - **Breaking**: `billing` is now required in `sync_accounts` request (previously optional). Existing callers that omit `billing` will receive validation errors. Billing is accept-or-reject — sellers cannot silently remap billing.
+  - Make `account` required on create_media_buy, get_media_buys, sync_creatives, sync_catalogs, sync_audiences, sync_event_sources
+  - Make `account` required per record on report_usage
+  - `sync_accounts` no longer returns `account_id` — the seller manages account identifiers internally. Buyers discover IDs via `list_accounts` (explicit model) or use natural keys (implicit model).
+  - Make `account_id` required in `account.json` (remove conditional if/then — the schema is only used in seller responses where the seller always has an ID)
+  - Add `account_scope` to account and sync_accounts response schemas
+  - Add `ACCOUNT_SETUP_REQUIRED` and `ACCOUNT_AMBIGUOUS` error codes
+  - Add `get_account_financials` task for operator-billed account financial status
+
+- ff62171: Add `app` catalog type for mobile app install and re-engagement advertising.
+
+  Introduces `AppItem` schema with fields for `bundle_id`, `apple_id`, `platform` (ios/android), store metadata, and deep links. Maps to Google App Campaigns, Apple Search Ads, Meta App Ads, TikTok App Campaigns, and Snapchat App Install Ads.
+
+  Also adds `app_id` to `content-id-type` for conversion event matching and `APP_ITEM_ID` to universal macros for tracking URL substitution.
+
+- ce439ca: Brand registry lookup, unified enrichment, and membership inheritance
+- c872c94: Brand registry as primary company identity source. Member profiles now link to the brand registry via `primary_brand_domain` instead of storing logos and colors directly. Members set up their brand through the brand tools and get a hosted brand.json at `agenticadvertising.org/brands/yourdomain.com/brand.json`. Placing a one-line pointer at `/.well-known/brand.json` makes AgenticAdvertising.org the authoritative brand source for any domain.
+- 1051929: Add optional `campaign_ref` field to `get_products` and `create_media_buy` for grouping related operations under a buyer-defined campaign label. Echoed in media buy responses for CRM and ad server correlation.
+- 15a64e6: Refactor `CatalogFieldBinding` schema to use a `kind` discriminator field (`"scalar"`, `"asset_pool"`, `"catalog_group"`) instead of `allOf + oneOf` with negative `not` constraints. Scalar and asset pool variants are extracted to `definitions` for reuse in `per_item_bindings`. Generates a clean TypeScript discriminated union instead of triplicated intersections.
+- 5b8feea: Add catalog item macros for item-level attribution: SKU, GTIN, OFFERING_ID, JOB_ID, HOTEL_ID, FLIGHT_ID, VEHICLE_ID, LISTING_ID, STORE_ID, PROGRAM_ID, and DESTINATION_ID (mirroring the content_id_type enum), plus CATALOG_ID for catalog-level attribution and CREATIVE_VARIANT_ID for seller-assigned creative variant tracking. Enables closed-loop attribution from impression tracking through conversion events.
+- e2e68d3: Add typed catalog assets, field bindings, and feed field mappings.
+
+  **Typed assets on vertical catalog items**: `hotel`, `flight`, `job`, `vehicle`, `real_estate`, `education`, `destination`, and `app` item schemas now support an `assets` array using `OfferingAssetGroup` structure. Enables buyers to provide typed image pools (`images_landscape`, `images_vertical`, `logo`, etc.) alongside existing scalar fields, so formats can declare which asset group to use for each platform-specific slot rather than relying on a single `image_url`.
+
+  **Field bindings on format catalog requirements**: `catalog_requirements` entries now support `field_bindings` — explicit mappings from format template slots (`asset_id`) to catalog item fields (dot-notation path) or typed asset pools (`asset_group_id`). Supports scalar field binding, asset pool binding, and repeatable group iteration over catalog items. Optional — agents can still infer without bindings.
+
+  **Feed field mappings on catalog**: The `Catalog` object now accepts `feed_field_mappings` for normalizing external feeds during `sync_catalogs` ingestion. Supports field renames, named transforms (`date`, `divide`, `boolean`, `split`) with per-transform parameters, static literal injection, and placement of image URLs into typed asset pools. Eliminates the need to preprocess every non-AdCP feed before syncing.
+
+- 5622c51: Add build capability discovery to creative formats.
+
+  `format.json` gains `input_format_ids` — the source creative formats a format accepts as input manifests (alongside the existing `output_format_ids` for what can be produced).
+
+  `list_creative_formats` gains two new filter parameters:
+
+  - `output_format_ids` — filter to formats that can produce any of the specified outputs
+  - `input_format_ids` — filter to formats that accept any of the specified formats as input
+
+  Together these let agents ask a creative agent "what can you build?" and query in either direction: "given outputs I need, what inputs do you accept?" or "given inputs I have, what outputs can you produce?"
+
+- 7b1d51e: Add `get_creative_features` task for creative governance
+
+  Introduces the creative analog of `get_property_features` — a general-purpose task for evaluating creatives and returning feature values. Supports security scanning, creative quality assessment, content categorization, and any other creative evaluation through the same feature-based pattern used by property governance.
+
+  New schemas:
+
+  - `get-creative-features-request.json` — accepts a creative manifest and optional feature_ids filter
+  - `get-creative-features-response.json` — returns feature results with discriminated union (success/error)
+  - `creative-feature-result.json` — individual feature evaluation (value, confidence, expires_at, etc.)
+
+  Also adds `creative_features` to the governance section of `get_adcp_capabilities` response, allowing agents to advertise which creative features they can evaluate.
+
+- 5289d34: Add 3-tier event visibility: public, invite-only listed, and invite-only unlisted. Invite-only events support explicit email invite lists and rule-based access (membership required, org allow-list). Adds `interested` as a distinct registration status for non-invited users who express interest.
+- cb5af61: Add `get_media_buys` task for operational campaign monitoring. Returns current media buy status, creative approval state per package, missing format IDs, and optional near-real-time delivery snapshots with `staleness_seconds` to indicate data freshness. Complements `get_media_buy_delivery` which is for authoritative reporting over date ranges.
+- c782f66: Note: These changes are breaking relative to earlier betas but no fields removed here were ever in a stable release.
+
+  Add `sync_catalogs` task and unified `Catalog` model. Replace separate `offerings[]` and `product_selectors` fields on `PromotedOfferings` with a typed `Catalog` object that supports inline items, external URL references, and platform-synced catalogs. Expand catalog types beyond offerings and product to include inventory, store, and promotion feeds. Add `sync_catalogs` task with request/response schemas, async response patterns (working, input-required, submitted), per-catalog approval workflow, and item-level review status. Add `catalog_requirements` on `Format` so formats can declare what catalog feeds they need and what fields each must provide. Add `OfferingAssetGroup` schema for structured per-offering creative pools, `OfferingAssetConstraint` for format-level asset requirements, and `geo_targets` on `Offering` for location-specific offerings. Add `account-state` conceptual doc framing Account as the central stateful container in AdCP 3.0. Rename promoted-offerings doc to catalogs to reflect its expanded scope. Add `StoreItem` schema for physical locations within store-type catalogs, with lat/lng coordinates, structured address, operating hours, and tags. Add `Catchment` schema for defining store catchment areas via three methods: isochrone inputs (travel time + transport mode), simple radius, or pre-computed GeoJSON geometry. Add `transport-mode` and `distance-unit` enums. Add industry-vertical catalog types (`hotel`, `flight`, `job`, `vehicle`, `real_estate`, `education`, `destination`) with canonical item schemas for each, drawn from Google Ads, Meta, LinkedIn, and Microsoft platform feed specs. Add shared `Price` schema. Add `linkedin_jobs` feed format. Remove `PromotedOfferings` wrapper — catalogs are now first-class. Creatives reference catalogs via `catalog` field instead of embedding in assets. Remove `promoted_offering` from media-buy and creative-manifest schemas. Add `conversion_events` and `content_id_type` to Catalog for conversion attribution. Rename catalog type `offerings` to `offering` for consistency with other singular type names. Remove `portfolio_ref` from Offering — structured `assets` (OfferingAssetGroup) replaces external portfolio references. Replace `product_selectors` (PromotedProducts) on `get_products` with `catalog` ($ref catalog.json) — one concept, one schema. Delete `promoted-products.json`. Add `catalog_types` to Product so products declare what catalog types they support. Add `matched_ids` and `matched_count` to `catalog_match`, remove `matched_skus`. Add `catalog` field to `package-request` and `package-update` for catalog-driven packages. Add `store_catchments` targeting dimension referencing synced store catalogs. Add `by_catalog_item` delivery breakdown in `get_media_buy_delivery` response for per-item reporting on catalog-driven packages. Update `creative-variant` description to clarify that catalog items rendered as ads are variants.
+
+- 0e96a78: Add capability declarations for metric optimization goals, cross-channel engagement metrics, video view duration control, and value optimization.
+
+  **New metric kinds** (`optimization_goals` with `kind: 'metric'`):
+
+  - `engagements` — direct ad interaction beyond viewing: social reactions/comments/shares, story/unit opens, interactive overlay taps on CTV, companion banner interactions on audio
+  - `follows` — new followers, page likes, artist/podcast/channel subscribes
+  - `saves` — saves, bookmarks, playlist adds, pins
+  - `profile_visits` — visits to the brand's page, artist page, or channel
+
+  **Video view duration control:**
+
+  - `view_duration_seconds` on metric goals — minimum view duration (in seconds) that qualifies as a `completed_views` event (e.g., 2s, 6s, 15s). Sellers declare supported durations in `metric_optimization.supported_view_durations`. Sellers must reject unsupported values.
+
+  **New event goal target kind:**
+
+  - `maximize_value` — maximize total conversion value within budget without a specific ROAS ratio target. Steers spend toward higher-value conversions. Requires `value_field` on event sources.
+
+  **Product schema additions:**
+
+  - `metric_optimization` — declares which metric kinds a product can optimize for (`supported_metrics`), which view durations are available (`supported_view_durations`), and which target kinds are supported (`supported_targets`). Presence indicates support for `kind: 'metric'` goals without any conversion tracking setup.
+  - `max_optimization_goals` — maximum number of goals a package can carry. Most social platforms accept only 1.
+
+  **Product schema corrections:**
+
+  - `conversion_tracking.supported_optimization_strategies` renamed to `conversion_tracking.supported_targets` for consistency with `metric_optimization.supported_targets`. Both fields answer the same question: "what can I put in `target.kind`?"
+  - Target kind enum values aligned across product capabilities and optimization goal schemas. Product `supported_targets` values (`cost_per`, `threshold_rate`, `per_ad_spend`, `maximize_value`) now exactly match `target.kind` values on optimization goals — agents can do direct string comparison.
+  - `conversion_tracking` description clarified to be for `kind: 'event'` goals only.
+
+  **Delivery metrics additions:**
+
+  - `engagements`, `follows`, `saves`, `profile_visits` count fields added to delivery-metrics.json so buyers can see performance against the new metric optimization goals.
+  - `completed_views` description updated to acknowledge configurable view duration threshold.
+
+  **Forecastable metrics additions:**
+
+  - `engagements`, `follows`, `saves`, `profile_visits` added to forecastable-metric.json for forecast completeness.
+
+  **Capabilities schema addition:**
+
+  - `media_buy.conversion_tracking.multi_source_event_dedup` — declares whether the seller can deduplicate events across multiple sources. When absent or false, buyers should use a single event source per goal.
+
+  **Optimization goal description clarifications:**
+
+  - `event_sources` references the `multi_source_event_dedup` capability; explains first-source-wins fallback when dedup is unsupported.
+  - `value_field` and `value_factor` clarified as seller obligations (not optional hints). The seller must use these for value extraction and aggregation. They are not passed to underlying platform APIs.
+
+- 5b25ccd: Redesign optimization goals with multiple event sources, threshold rates, and attention metrics.
+
+  - `optimization_goal` (singular) → `optimization_goals` (array) on packages
+  - `OptimizationGoal` is a discriminated union on `kind`:
+    - `kind: "event"` — optimize for advertiser-tracked conversion events via `event_sources` array of source-type pairs. Seller deduplicates by `event_id` across sources. Each entry can specify `value_field` and `value_factor` for value-based targets.
+    - `kind: "metric"` — optimize for a seller-native delivery metric with optional `cost_per` or `threshold_rate` target
+  - Target kinds: `cost_per` (cost per unit), `threshold_rate` (minimum per-impression value), `per_ad_spend` (return ratio on event values), `maximize_value` (maximize total conversion value)
+  - Metric enum: `clicks`, `views`, `completed_views`, `viewed_seconds`, `attention_seconds`, `attention_score`, `engagements`, `follows`, `saves`, `profile_visits`
+  - Both kinds support optional `priority` (integer, 1 = highest) for multi-goal packages
+  - `product.conversion_tracking.supported_targets`: `cost_per`, `per_ad_spend`, `maximize_value`
+  - `product.metric_optimization.supported_targets`: `cost_per`, `threshold_rate`
+
+- e6767f2: Add `overlays` to format asset definitions for publisher-controlled elements that render over buyer content.
+
+  Publishers can now declare video player controls, publisher logos, and similar per-asset chrome as `overlays` on individual assets. Each overlay includes `bounds` (pixel or fractional, relative to the asset's own top-left corner) and optional `visual` URLs for light and dark theme variants. Creative agents use this to avoid placing critical buyer content behind publisher chrome when composing creatives.
+
+- dfcb522: Add structured pricing options to signals and content standards protocols.
+
+  `get_signals` now returns `pricing_options` (array of typed pricing option objects) instead of the legacy `pricing: {cpm, currency}` field. This enables signals agents to offer time-based subscriptions, flat-rate, CPCV, and other pricing models alongside CPM.
+
+  `list_content_standards` / `get_content_standards` now include `pricing_options` on content standards objects as an optional field, using the same structure. Full billing integration for governance agents will be defined when the account setup flow for that protocol is designed.
+
+  `report_usage` has been simplified: `kind` and `operator_id` are removed. The receiving vendor agent already knows what type of service it provides, and the billing operator is captured by the account reference (`brand + operator` form or implied by account setup when using `account_id`).
+
+  `report_usage` now accepts an `idempotency_key` field. Supply a client-generated UUID per request to prevent duplicate billing on retries.
+
+  `activate_signal` now accepts `pricing_option_id`. Pass the pricing option selected from `get_signals` to record the buyer's pricing commitment at activation time.
+
+- 2957069: Add promoted-offerings-requirement enum and `requires` property to promoted offerings asset requirements (#1040)
+- a7feccb: Add property list check and enhancement to the AAO registry API.
+
+  Registry:
+
+  - New `domain_classifications` table with typed entries (`ad_server`, `intermediary`, `cdn`, `tracker`), seeded with ~60 known ad tech infrastructure domains
+  - New `property_check_reports` table stores full check results by UUID for 7 days
+
+  API:
+
+  - `POST /api/properties/check` — accepts up to 10,000 domains, returns remove/modify/assess/ok buckets and a report ID
+  - `GET /api/properties/check/:reportId` — retrieve a stored report
+
+  Tools:
+
+  - `check_property_list` MCP tool — runs the check and returns a compact summary + report URL (avoids flooding agent context with thousands of domain entries)
+  - `enhance_property` MCP tool — analyzes a single unknown domain: WHOIS age check (< 90 days = high risk), adagents.json validation, AI site structure analysis, submits as pending registry entry for Addie review
+
+- 80afa97: Add sandbox mode as a protocol parameter on all task requests. Sellers declare support via `features.sandbox` in capabilities. Buyers pass `sandbox: true` on any request to run without real platform calls or spend. Replaces the previously documented HTTP header approach (X-Dry-Run, X-Test-Session-ID, X-Mock-Time).
+- 8f26baf: Add Swiss (`ch_plz`) and Austrian (`at_plz`) postal code systems to geo targeting.
+- b61f271: Add `sync_audiences` task for CRM-based audience management.
+
+  Buyers wrapping closed platforms (LinkedIn, Meta, TikTok, Google Ads) need to upload hashed CRM data before creating campaigns that target or suppress matched audiences. This adds a dedicated task for that workflow, parallel to `sync_event_sources`.
+
+  Schema:
+
+  - New task: `sync_audiences` with request and response schemas
+  - New core schema: `audience-member.json` — hashed identifiers for CRM list members (email, phone, MAIDs)
+  - `targeting.json`: add `audience_include` and `audience_exclude` arrays for referencing audiences in `create_media_buy` targeting overlays
+
+  Documentation:
+
+  - New task reference: `docs/media-buy/task-reference/sync_audiences.mdx`
+  - Updated `docs/media-buy/advanced-topics/targeting.mdx` with `audience_include`/`audience_exclude` overlay documentation
+
+- 142bcd5: Add `rejected` account status for accounts that were never approved. Previously, `closed` covered both "was active, now terminated" and "seller declined the request", which was counterintuitive. Now `pending_approval` → `rejected` (declined) is distinct from `active` → `closed` (terminated).
+- 0cede41: Add CreativeBrief type to BuildCreativeRequest for structured campaign context
+
+### Patch Changes
+
+- 24782c2: Add dedicated task reference pages for `sync_accounts` and `list_accounts` under Media Buy Protocol Task Reference.
+- 719135b: Move accounts management from manage to admin; fix stale prospect links to removed organizations page.
+- 5a90c55: Fix Addie billing status conflating active subscriptions with paid invoices.
+- cc6da0c: Increase Addie conversation history from 10 to 20 messages for longer debugging sessions.
+- 53e1d65: Add property registry context to Addie's tool reference so she understands what the community property registry is, how data is managed across the three source tiers (authoritative/enriched/community), and when to use each property tool.
+- d4f7723: Empty changeset — internal Addie improvements (no protocol changes).
+- dce0090: Update Addie's test_adcp_agent tool to use @adcp/client 3.20.0 suite API.
+- acd9db7: Addie quality improvements from thread review: accurate spec claims, fictional example names, ads.txt knowledge, shorter deflections, agent type awareness, and session-level web feedback prompt.
+- 2d072c1: Clarify push notification config flow in docs and schema.
+
+  - Fix `push_notification_config` placement and naming in webhook docs (task body, not protocol metadata)
+  - Add `push_notification_config` explicitly to `create_media_buy` request schema
+  - Fix `operation_id` description: client-generated, echoed by publisher
+  - Fix HMAC signature format to match wire implementation
+
+- 2b79286: Clarify that end_date is exclusive in get_media_buy_delivery documentation
+
+  - Add explicit "inclusive" and "exclusive" labels to start_date/end_date parameters
+  - Add callout explaining start-inclusive, end-exclusive behavior with examples
+  - Add examples table showing common date range patterns
+  - Reinforce behavior in Query Behavior section
+
+- 24b972e: Document save endpoints for brands and properties in registry API docs.
+- b311f65: Fix Addie brand management: add missing brand tools to tool reference, prevent save_brand from overwriting enrichment data
+- 5e5a3b7: Fix Addie streaming errors, MCP token expiry, and SSE error handling.
+- d447e71: Fix three brand identity bugs: has_manifest false when brand.json found, uploaded logo not showing on member card, and "Set up brand" link redirecting to dashboard.
+- 5b8feea: Fix build_creative doc examples: remove catalog_id from inline catalogs, add missing offering_id to inline offering items.
+- 9f70a06: fix: set CORS headers on MCP 401 responses so OAuth flow can start
+- 894e9e9: Empty changeset — no protocol impact.
+- 3378218:
+- cf3ebb3: Fix schema version alias resolution for prereleases
+
+  - Fix prerelease sorting bug in schema middleware: `/v3/` was resolving to `3.0.0-beta.1` instead of `3.0.0-beta.3` because prereleases were sorted ascending instead of descending
+  - Update `sync_event_sources` and `log_event` docs to use `/v3/` schema links (these schemas were added in v3)
+
+- bf19909: Fix API key authentication for WorkOS keys using the new `sk_` prefix. WorkOS changed their key format from `wos_api_key_` to `sk_`, which caused all newer API keys to be rejected by the auth middleware before reaching validation.
+- 5418b93: Fix broken schema links in sync_audiences documentation. Changed from `/schemas/v2/` to `/schemas/v1/` since this task was added after the v2.5.x and v3.0.0-beta releases and its schemas only exist in `latest` (which v1 points to).
+- 3e7e545: Fix UTF-8 encoding corruption for non-ASCII characters in brand and agent registry files.
+
+  When external servers serve `.well-known/brand.json` or `.well-known/adagents.json` with a non-UTF-8 charset in their `Content-Type` header (e.g. `charset=iso-8859-1`), axios was decoding the UTF-8 response bytes using that charset, corrupting multi-byte characters like Swedish ä/ö/å into mojibake.
+
+  Fix: use `responseType: 'arraybuffer'` on all external fetches so axios delivers raw bytes, then explicitly decode as UTF-8 regardless of what the server declares.
+
+- 751760a:
+- 5b7cbb3: Add Lusha-powered company lookup to referral prospect search: domain-first create form auto-imports companies with full enrichment data.
+- 5b7cbb3: Add /manage tier for kitchen cabinet governance access
+- 5b7cbb3: Add member referral code system: invite prospects with a personalized landing page, lock the discount to their account on acceptance, and show a 30-day countdown in the membership dashboard.
+- 333618c: Download brand logos from Brandfetch CDN to our own PostgreSQL-backed store when enriching brands. Logos are served from `/logos/brands/:domain/:idx` so external agents can download them without hitting Brandfetch hotlinking restrictions.
+- e6a62ad:
+- b61fcd7: Register all tool sets for web chat, matching Slack channel parity. Previously web chat only had knowledge, billing, and schema tools — brand, directory, property, admin, events, meetings, collaboration, and other tools were missing, causing "Unknown tool" errors. Extracts shared baseline tool registration into a single module both channels import.
+
 ## 3.0.0-beta.3
 
 ### Major Changes
